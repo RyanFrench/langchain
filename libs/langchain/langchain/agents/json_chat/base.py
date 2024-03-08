@@ -8,21 +8,27 @@ from langchain_core.tools import BaseTool
 from langchain.agents.format_scratchpad import format_log_to_messages
 from langchain.agents.json_chat.prompt import TEMPLATE_TOOL_RESPONSE
 from langchain.agents.output_parsers import JSONAgentOutputParser
-from langchain.tools.render import render_text_description
+from langchain.tools.render import ToolsRenderer, render_text_description
 
 
 def create_json_chat_agent(
-    llm: BaseLanguageModel, tools: Sequence[BaseTool], prompt: ChatPromptTemplate
+    llm: BaseLanguageModel,
+    tools: Sequence[BaseTool],
+    prompt: ChatPromptTemplate,
+    stop_sequence: bool = True,
+    tools_renderer: ToolsRenderer = render_text_description,
 ) -> Runnable:
     """Create an agent that uses JSON to format its logic, build for Chat Models.
 
     Args:
         llm: LLM to use as the agent.
         tools: Tools this agent has access to.
-        prompt: The prompt to use, must have input keys:
-            `tools`: contains descriptions and arguments for each tool.
-            `tool_names`: contains all tool names.
-            `agent_scratchpad`: contains previous agent actions and tool outputs.
+        prompt: The prompt to use. See Prompt section below for more.
+        stop_sequence: Adds a stop token of "Observation:" to avoid hallucinates. 
+            Default is True. You may to set this to False if the LLM you are using
+            does not support stop sequences.
+        tools_renderer: This controls how the tools are converted into a string and
+            then passed into the LLM. Default is `render_text_description`.
 
     Returns:
         A Runnable sequence representing an agent. It takes as input all the same input
@@ -58,7 +64,14 @@ def create_json_chat_agent(
                 }
             )
 
-    Creating prompt example:
+    Prompt:
+    
+        The prompt must have input keys:
+            * `tools`: contains descriptions and arguments for each tool.
+            * `tool_names`: contains all tool names.
+            * `agent_scratchpad`: must be a MessagesPlaceholder. Contains previous agent actions and tool outputs as messages.
+        
+        Here's an example:
 
         .. code-block:: python
 
@@ -141,10 +154,13 @@ def create_json_chat_agent(
         raise ValueError(f"Prompt missing required variables: {missing_vars}")
 
     prompt = prompt.partial(
-        tools=render_text_description(list(tools)),
+        tools=tools_renderer(list(tools)),
         tool_names=", ".join([t.name for t in tools]),
     )
-    llm_with_stop = llm.bind(stop=["\nObservation"])
+    if stop_sequence:
+        llm_to_use = llm.bind(stop=["\nObservation"])
+    else:
+        llm_to_use = llm
 
     agent = (
         RunnablePassthrough.assign(
@@ -153,7 +169,7 @@ def create_json_chat_agent(
             )
         )
         | prompt
-        | llm_with_stop
+        | llm_to_use
         | JSONAgentOutputParser()
     )
     return agent
